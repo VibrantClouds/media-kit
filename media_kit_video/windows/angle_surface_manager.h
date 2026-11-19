@@ -21,6 +21,7 @@
 #include <d3d11.h>
 #include <wrl.h>
 
+#include "surface_manager.h"
 #include "utils.h"
 
 #include <cstdint>
@@ -35,21 +36,21 @@
 // A large part of implementation is inspired from Flutter.
 // https://github.com/flutter/engine/blob/master/shell/platform/windows/angle_surface_manager.h
 
-class ANGLESurfaceManager {
+class ANGLESurfaceManager : public SurfaceManager {
  public:
-  const int32_t width() const { return width_; }
-  const int32_t height() const { return height_; }
-  const HANDLE handle() const { return handle_; }
+  const int32_t width() const override { return width_; }
+  const int32_t height() const override { return height_; }
+  const HANDLE handle() const override { return handle_; }
 
   ANGLESurfaceManager(int32_t width, int32_t height);
 
-  ~ANGLESurfaceManager();
+  ~ANGLESurfaceManager() override;
 
-  void SetSize(int32_t width, int32_t height);
+  void SetSize(int32_t width, int32_t height) override;
 
-  void Draw(std::function<void()> callback);
+  void Draw(std::function<void()> callback) override;
 
-  void Read();
+  void Read() override;
 
   void MakeCurrent(bool value);
 

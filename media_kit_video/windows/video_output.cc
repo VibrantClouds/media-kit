@@ -35,16 +35,55 @@ VideoOutput::VideoOutput(int64_t handle,
     mpv_set_option_string(handle_, "video-sync", "audio");
     mpv_set_option_string(handle_, "video-timing-offset", "0");
     // First try to initialize video playback with hardware acceleration &
-    // |ANGLESurfaceManager|, use S/W API as fallback.
+    // |D3D11SurfaceManager|, then |ANGLESurfaceManager|, use S/W API as
+    // fallback.
     auto is_hardware_acceleration_enabled = false;
-    // Attempt to use H/W rendering.
+    // Attempt to use libmpv's D3D11 render API (libmpv 0.42 or newer). Older
+    // libmpv fails |mpv_render_context_create| & falls through to ANGLE.
     if (configuration.enable_hardware_acceleration) {
       try {
-        // OpenGL context needs to be set before |mpv_render_context_create|.
-        surface_manager_ = std::make_unique<ANGLESurfaceManager>(
+        auto d3d11_surface_manager = std::make_unique<D3D11SurfaceManager>(
             static_cast<int32_t>(width_.value_or(1)),
             static_cast<int32_t>(height_.value_or(1)));
-        surface_manager_->MakeCurrent(true);
+        mpv_d3d11_init_params d3d11_init_params{
+            d3d11_surface_manager->device(),
+        };
+        mpv_render_param params[] = {
+            {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_D3D11},
+            {MPV_RENDER_PARAM_D3D11_INIT_PARAMS, &d3d11_init_params},
+            {MPV_RENDER_PARAM_INVALID, nullptr},
+        };
+        if (mpv_render_context_create(&render_context_, handle_, params) == 0) {
+          // Set first: the render context exists now, so ANGLE could not
+          // create another one even if |Resize| below threw.
+          is_hardware_acceleration_enabled = true;
+          d3d11_surface_manager_ = d3d11_surface_manager.get();
+          surface_manager_ = std::move(d3d11_surface_manager);
+          Resize(width_.value_or(1), height_.value_or(1));
+          mpv_render_context_set_update_callback(
+              render_context_,
+              [](void* context) {
+                auto that = reinterpret_cast<VideoOutput*>(context);
+                that->NotifyRender();
+              },
+              reinterpret_cast<void*>(this));
+          std::cout << "media_kit: VideoOutput: Using H/W rendering (D3D11)."
+                    << std::endl;
+        }
+      } catch (...) {
+        // Do nothing. Fall back to |ANGLESurfaceManager|.
+      }
+    }
+    // Attempt to use H/W rendering.
+    if (configuration.enable_hardware_acceleration &&
+        !is_hardware_acceleration_enabled) {
+      try {
+        // OpenGL context needs to be set before |mpv_render_context_create|.
+        auto angle_surface_manager = std::make_unique<ANGLESurfaceManager>(
+            static_cast<int32_t>(width_.value_or(1)),
+            static_cast<int32_t>(height_.value_or(1)));
+        angle_surface_manager->MakeCurrent(true);
+        surface_manager_ = std::move(angle_surface_manager);
         Resize(width_.value_or(1), height_.value_or(1));
         mpv_opengl_init_params gl_init_params{
             [](auto, auto name) {
@@ -160,6 +199,15 @@ void VideoOutput::Render() {
     // H/W
     if (surface_manager_ != nullptr) {
       surface_manager_->Draw([&]() {
+        if (d3d11_surface_manager_ != nullptr) {
+          mpv_d3d11_fbo fbo{d3d11_surface_manager_->texture()};
+          mpv_render_param params[]{
+              {MPV_RENDER_PARAM_D3D11_FBO, &fbo},
+              {MPV_RENDER_PARAM_INVALID, nullptr},
+          };
+          mpv_render_context_render(render_context_, params);
+          return;
+        }
         mpv_opengl_fbo fbo{
             0,
             surface_manager_->width(),
