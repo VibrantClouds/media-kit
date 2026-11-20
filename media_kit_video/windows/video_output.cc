@@ -9,6 +9,7 @@
 #include "video_output.h"
 
 #include <algorithm>
+#include <exception>
 
 // Limit the frame size to 1080p in software rendering.
 // This is for performance reasons & to avoid allocating too much memory.
@@ -53,7 +54,12 @@ VideoOutput::VideoOutput(int64_t handle,
             {MPV_RENDER_PARAM_D3D11_INIT_PARAMS, &d3d11_init_params},
             {MPV_RENDER_PARAM_INVALID, nullptr},
         };
-        if (mpv_render_context_create(&render_context_, handle_, params) == 0) {
+        auto error =
+            mpv_render_context_create(&render_context_, handle_, params);
+        if (error != 0) {
+          std::cout << "media_kit: VideoOutput: D3D11 unavailable: "
+                    << mpv_error_string(error) << std::endl;
+        } else {
           // Set first: the render context exists now, so ANGLE could not
           // create another one even if |Resize| below threw.
           is_hardware_acceleration_enabled = true;
@@ -70,8 +76,10 @@ VideoOutput::VideoOutput(int64_t handle,
           std::cout << "media_kit: VideoOutput: Using H/W rendering (D3D11)."
                     << std::endl;
         }
-      } catch (...) {
-        // Do nothing. Fall back to |ANGLESurfaceManager|.
+      } catch (const std::exception& e) {
+        // Fall back to |ANGLESurfaceManager|.
+        std::cout << "media_kit: VideoOutput: D3D11 unavailable: " << e.what()
+                  << std::endl;
       }
     }
     // Attempt to use H/W rendering.

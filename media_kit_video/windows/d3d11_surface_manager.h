@@ -41,7 +41,11 @@ class D3D11SurfaceManager : public SurfaceManager {
   void Read() override;
 
  private:
-  void CreateTextures();
+  void CreateTextures(int32_t width,
+                      int32_t height,
+                      Microsoft::WRL::ComPtr<ID3D11Texture2D>& internal_texture,
+                      Microsoft::WRL::ComPtr<ID3D11Texture2D>& texture,
+                      HANDLE& handle);
 
   int32_t width_ = 1;
   int32_t height_ = 1;

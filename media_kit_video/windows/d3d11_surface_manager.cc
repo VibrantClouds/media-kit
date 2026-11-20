@@ -29,7 +29,7 @@ D3D11SurfaceManager::D3D11SurfaceManager(int32_t width, int32_t height)
   if (FAILED(hr)) {
     throw std::runtime_error("Unable to create Windows Direct3D device.");
   }
-  CreateTextures();
+  CreateTextures(width_, height_, internal_texture_, texture_, handle_);
   mutex_ = ::CreateMutex(NULL, FALSE, NULL);
 }
 
@@ -41,11 +41,18 @@ void D3D11SurfaceManager::SetSize(int32_t width, int32_t height) {
   if (width == width_ && height == height_) {
     return;
   }
+  // Created before taking the mutex, so a failure leaves the current textures
+  // in place & the mutex free for |Read|.
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> internal_texture, texture;
+  HANDLE handle = nullptr;
+  CreateTextures(width, height, internal_texture, texture, handle);
   // |Read| may be copying between the textures on Flutter's raster thread.
   ::WaitForSingleObject(mutex_, INFINITE);
   width_ = width;
   height_ = height;
-  CreateTextures();
+  internal_texture_.Swap(internal_texture);
+  texture_.Swap(texture);
+  handle_ = handle;
   ::ReleaseMutex(mutex_);
 }
 
@@ -64,33 +71,35 @@ void D3D11SurfaceManager::Read() {
   ::ReleaseMutex(mutex_);
 }
 
-void D3D11SurfaceManager::CreateTextures() {
-  internal_texture_.Reset();
-  texture_.Reset();
-  handle_ = nullptr;
+void D3D11SurfaceManager::CreateTextures(
+    int32_t width,
+    int32_t height,
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>& internal_texture,
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>& texture,
+    HANDLE& handle) {
   D3D11_TEXTURE2D_DESC desc = {};
-  desc.Width = width_;
-  desc.Height = height_;
+  desc.Width = width;
+  desc.Height = height;
   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
   desc.MipLevels = 1;
   desc.ArraySize = 1;
   desc.SampleDesc.Count = 1;
   desc.Usage = D3D11_USAGE_DEFAULT;
   desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-  // libmpv draws into |internal_texture_|, & |Read| copies each frame to the
-  // shared |texture_|, so Flutter never reads a frame that is half drawn.
-  auto hr = device_->CreateTexture2D(&desc, nullptr, &internal_texture_);
+  // libmpv draws into |internal_texture|, & |Read| copies each frame to the
+  // shared |texture|, so Flutter never reads a frame that is half drawn.
+  auto hr = device_->CreateTexture2D(&desc, nullptr, &internal_texture);
   if (FAILED(hr)) {
     throw std::runtime_error("Unable to create Direct3D texture.");
   }
   desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-  hr = device_->CreateTexture2D(&desc, nullptr, &texture_);
+  hr = device_->CreateTexture2D(&desc, nullptr, &texture);
   if (FAILED(hr)) {
     throw std::runtime_error("Unable to create Direct3D texture.");
   }
   Microsoft::WRL::ComPtr<IDXGIResource> resource;
-  hr = texture_.As(&resource);
-  if (FAILED(hr) || FAILED(resource->GetSharedHandle(&handle_))) {
+  hr = texture.As(&resource);
+  if (FAILED(hr) || FAILED(resource->GetSharedHandle(&handle))) {
     throw std::runtime_error("Unable to retrieve Direct3D shared HANDLE.");
   }
 }
